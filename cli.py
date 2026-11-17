@@ -113,6 +113,22 @@ def cmd_exceptions(args):
     db.close()
 
 
+def cmd_reconcile(args):
+    """Run deterministic reconciliation engine batch scan."""
+    from engine import reconcile_all
+    db = SessionLocal()
+    print_header("Running Deterministic 3-Way Reconciliation Batch Scan")
+    summary = reconcile_all(db)
+    print(f"  Total Invoices Scanned: {summary['total_invoices_scanned']}")
+    print(f"  Total POs Scanned:      {summary['total_pos_scanned']}")
+    print(f"  New Exceptions Raised:  {summary['exceptions_generated']}")
+    if summary["breakdown_by_type"]:
+        print("\n  Exceptions by Type:")
+        for etype, count in summary["breakdown_by_type"].items():
+            print(f"    - {etype:<26}: {count}")
+    db.close()
+
+
 def cmd_run_tests(args):
     """Run pytest test suite."""
     print_header("Executing Automated Pytest Suite")
@@ -144,6 +160,9 @@ def main():
         "QTY_MISMATCH_3WAY", "PRICE_VARIANCE", "DUPLICATE_INVOICE", "GHOST_RECEIPT_MISSING_GR", "MISSING_PO"
     ], help="Filter by exception type")
 
+    # reconcile
+    subparsers.add_parser("reconcile", help="Run deterministic 3-way reconciliation scan across database")
+
     # serve
     serve_parser = subparsers.add_parser("serve", help="Start FastAPI REST server")
     serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="Host address (default: 127.0.0.1)")
@@ -160,6 +179,8 @@ def main():
         cmd_inspect_po(args)
     elif args.command == "exceptions":
         cmd_exceptions(args)
+    elif args.command == "reconcile":
+        cmd_reconcile(args)
     elif args.command == "serve":
         cmd_serve(args)
     elif args.command == "test":

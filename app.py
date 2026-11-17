@@ -5,13 +5,14 @@ with strict Pydantic validation and audit logging.
 """
 
 from contextlib import asynccontextmanager
+import json
 from typing import List
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from database import get_db, init_db
-from models import PurchaseOrder, GoodsReceipt, Invoice, AuditLog
+from models import PurchaseOrder, GoodsReceipt, Invoice, ExceptionRecord, AuditLog
 from schemas import (
     PurchaseOrderIngestSchema,
     GoodsReceiptIngestSchema,
@@ -21,6 +22,7 @@ from schemas import (
     CSVRowError,
 )
 from csv_parser import parse_csv_content
+from engine import reconcile_invoice, reconcile_all
 
 
 @asynccontextmanager
@@ -107,6 +109,11 @@ def ingest_purchase_order(payload: PurchaseOrderIngestSchema, db: Session = Depe
     db.commit()
     db.refresh(po)
 
+    # Reconcile any existing invoices referencing this PO
+    waiting_invoices = db.query(Invoice).filter(Invoice.po_number == po.po_number).all()
+    for winv in waiting_invoices:
+        reconcile_invoice(db, winv)
+
     return IngestionSuccessResponse(
         message=f"Purchase Order '{payload.po_number}' ingested successfully.",
         entity_type="purchase_order",
@@ -169,6 +176,11 @@ def ingest_goods_receipt(payload: GoodsReceiptIngestSchema, db: Session = Depend
     db.commit()
     db.refresh(gr)
 
+    # Reconcile any existing invoices referencing this PO
+    waiting_invoices = db.query(Invoice).filter(Invoice.po_number == gr.po_number).all()
+    for winv in waiting_invoices:
+        reconcile_invoice(db, winv)
+
     return IngestionSuccessResponse(
         message=f"Goods Receipt '{payload.gr_number}' ingested successfully.",
         entity_type="goods_receipt",
@@ -224,6 +236,9 @@ def ingest_invoice(payload: InvoiceIngestSchema, db: Session = Depends(get_db)):
     db.add(audit)
     db.commit()
     db.refresh(inv)
+
+    # Trigger deterministic 3-way reconciliation
+    reconcile_invoice(db, inv)
 
     return IngestionSuccessResponse(
         message=f"Invoice '{payload.invoice_number}' ingested successfully.",
@@ -384,6 +399,8 @@ async def ingest_csv(
             details=f"Bulk ingested {ingested_count}/{len(rows)} records from '{file.filename}'. Failed: {len(errors)}",
         ))
         db.commit()
+        # Trigger reconciliation on ingested dataset
+        reconcile_all(db)
 
     res_status = "success" if len(errors) == 0 else ("partial_success" if ingested_count > 0 else "failed")
     return CSVIngestionResponse(
@@ -395,3 +412,64 @@ async def ingest_csv(
         errors=errors,
         message=f"Processed {len(rows)} rows: {ingested_count} ingested, {len(errors)} failed.",
     )
+
+
+# ============================================================================
+# DETERMINISTIC RECONCILIATION & EXCEPTION ENDPOINTS
+# ============================================================================
+
+@app.post(
+    "/reconcile/batch",
+    tags=["Reconciliation Engine"],
+    summary="Trigger deterministic 3-way match batch scan across all ERP records",
+)
+def run_batch_reconciliation(db: Session = Depends(get_db)):
+    """
+    Executes a comprehensive, deterministic 3-way match reconciliation scan.
+    Evaluates quantity matching, price variances, completeness (missing PO/GR), and SLA breaches.
+    """
+    summary = reconcile_all(db)
+    return summary
+
+
+@app.get(
+    "/exceptions",
+    tags=["Exceptions"],
+    summary="List flagged exceptions with raw snapshots and discrepancy details",
+)
+def list_exceptions(
+    status: str = "OPEN",
+    severity: str = None,
+    exception_type: str = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """
+    Query exceptions flagged by the deterministic reconciliation engine.
+    """
+    query = db.query(ExceptionRecord)
+    if status:
+        query = query.filter(ExceptionRecord.status == status.upper())
+    if severity:
+        query = query.filter(ExceptionRecord.severity == severity.capitalize())
+    if exception_type:
+        query = query.filter(ExceptionRecord.exception_type == exception_type.upper())
+
+    records = query.order_by(ExceptionRecord.created_at.desc()).limit(limit).all()
+    results = []
+    for r in records:
+        results.append({
+            "exception_code": r.exception_code,
+            "po_number": r.po_number,
+            "invoice_number": r.invoice_number,
+            "gr_number": r.gr_number,
+            "vendor_id": r.vendor_id,
+            "exception_type": r.exception_type,
+            "severity": r.severity,
+            "variance_amount": r.variance_amount,
+            "status": r.status,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "discrepancy_details": json.loads(r.discrepancy_details) if r.discrepancy_details else None,
+            "raw_snapshots": json.loads(r.raw_snapshots) if r.raw_snapshots else None,
+        })
+    return {"total": len(results), "exceptions": results}

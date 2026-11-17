@@ -107,7 +107,9 @@ class ExceptionRecord(Base):
     # - DUPLICATE_INVOICE
     # - GHOST_RECEIPT_MISSING_GR
     # - MISSING_PO
-    severity = Column(String(20), default="MEDIUM", nullable=False)  # LOW, MEDIUM, HIGH, CRITICAL
+    severity = Column(String(20), default="Medium", nullable=False)  # High, Medium, Low, Critical
+    variance_amount = Column(Float, nullable=True, default=0.0)
+    raw_snapshots = Column(Text, nullable=True)  # Raw JSON snapshots of PO, Receipt, Invoice
     discrepancy_details = Column(Text, nullable=True)  # Structured description or JSON of the variance
     status = Column(String(50), default="OPEN", nullable=False)  # OPEN, UNDER_REVIEW, RESOLVED, DISMISSED
     created_at = Column(DateTime, default=utc_now, nullable=False)

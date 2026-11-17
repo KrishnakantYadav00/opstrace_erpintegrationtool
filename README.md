@@ -73,6 +73,46 @@ The ingestion layer simulates real-time ERP event webhooks and end-of-day batch 
 
 ---
 
+## Step 3: Deterministic Reconciliation & Exception Engine
+
+OpsTrace uses pure Python deterministic rules to evaluate linked procurement records—**never an LLM** for arithmetic or discrepancy detection.
+
+### 3-Way Match Rules
+
+1. **Quantity Check** (`QUANTITY_MISMATCH`)
+   - **Evaluation**: `invoice.quantity_billed != receipt.quantity_received or receipt.quantity_received != po.quantity`
+   - **Severity**: `High` if overbilling detected or variance > 10%, else `Medium`
+   - **Variance Amount**: `abs(invoice.qty - receipt.qty) * invoice.unit_price`
+
+2. **Price Check** (`PRICE_VARIANCE`)
+   - **Evaluation**: `invoice.unit_price > po.unit_price`
+   - **Severity**: `High` if markup $\ge$ 10% or total variance $\ge$ $250, else `Medium`
+   - **Variance Amount**: `(invoice.unit_price - po.unit_price) * invoice.quantity_billed`
+
+3. **Completeness Check** (`MISSING_PO`, `MISSING_RECEIPT`)
+   - **Evaluation**: Invoice exists, but PO is `None` or Goods Receipt is `None`
+   - **Severity**: `High`
+   - **Variance Amount**: `invoice.total_amount`
+
+4. **SLA Breach Check** (`SLA_BREACH`)
+   - **Evaluation**: `status in ["PENDING_APPROVAL", "PENDING_MATCH"]` and `created_at < now() - timedelta(days=3)`
+   - **Severity**: `Medium`
+
+5. **Duplicate Invoice Check** (`DUPLICATE_INVOICE`)
+   - **Evaluation**: Same `invoice_number` or identical vendor & total amount within 48 hours
+   - **Severity**: `High`
+
+### Exception Record Schema & Snapshots
+When an anomaly is flagged, OpsTrace creates an `ExceptionRecord` with:
+- `exception_code`: Unique identifier (e.g., `EXC-A1B2C3D4`)
+- `exception_type`: Standardized discrepancy code
+- `severity`: `High`, `Medium`, or `Low`
+- `variance_amount`: Exact monetary discrepancy in USD
+- `raw_snapshots`: Comprehensive JSON snapshot of the linked `purchase_order`, `goods_receipt`, and `invoice` at the time of evaluation.
+- `discrepancy_details`: Diagnostic breakdown with exact numerical deltas.
+
+---
+
 ## Quick Start
 
 ### 1. Requirements
