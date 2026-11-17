@@ -1,0 +1,397 @@
+"""
+OpsTrace Transaction Ingestion Layer - FastAPI Application.
+Provides real-time webhook endpoints (JSON) and bulk file endpoints (CSV)
+with strict Pydantic validation and audit logging.
+"""
+
+from contextlib import asynccontextmanager
+from typing import List
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+
+from database import get_db, init_db
+from models import PurchaseOrder, GoodsReceipt, Invoice, AuditLog
+from schemas import (
+    PurchaseOrderIngestSchema,
+    GoodsReceiptIngestSchema,
+    InvoiceIngestSchema,
+    IngestionSuccessResponse,
+    CSVIngestionResponse,
+    CSVRowError,
+)
+from csv_parser import parse_csv_content
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Ensure database tables exist on server startup."""
+    init_db()
+    yield
+
+
+app = FastAPI(
+    title="OpsTrace ERP Transaction Ingestion API",
+    description="Simulates ERP real-time event webhooks and bulk end-of-day CSV batch ingestion.",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+
+@app.get("/health", tags=["Health"])
+def health_check(db: Session = Depends(get_db)):
+    """Health check endpoint to verify API and DB connectivity."""
+    try:
+        db.execute(PurchaseOrder.__table__.select().limit(1))
+        db_status = "healthy"
+    except Exception as e:
+        db_status = f"unhealthy: {str(e)}"
+
+    return {
+        "status": "ok",
+        "service": "OpsTrace Ingestion API",
+        "database": db_status,
+    }
+
+
+# ============================================================================
+# REAL-TIME WEBHOOK INGESTION ENDPOINTS (JSON)
+# ============================================================================
+
+@app.post(
+    "/ingest/po",
+    response_model=IngestionSuccessResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Real-Time Webhooks"],
+    summary="Ingest Purchase Order event",
+)
+def ingest_purchase_order(payload: PurchaseOrderIngestSchema, db: Session = Depends(get_db)):
+    """
+    Ingest a single Purchase Order payload from an ERP webhook.
+    Normalizes identifiers, enforces strict positive quantities, and logs audit trail.
+    """
+    # Check for duplicate PO number
+    existing_po = db.query(PurchaseOrder).filter(PurchaseOrder.po_number == payload.po_number).first()
+    if existing_po:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Purchase Order with po_number '{payload.po_number}' already exists in database.",
+        )
+
+    po = PurchaseOrder(
+        po_number=payload.po_number,
+        vendor_id=payload.vendor_id,
+        vendor_name=payload.vendor_name,
+        sku=payload.sku,
+        description=payload.description,
+        quantity=payload.quantity,
+        unit_price=payload.unit_price,
+        total_amount=payload.total_amount,
+        currency=payload.currency,
+        status=payload.status,
+        order_date=payload.order_date,
+        expected_delivery_date=payload.expected_delivery_date,
+    )
+    db.add(po)
+
+    # Audit log
+    audit = AuditLog(
+        entity_type="PURCHASE_ORDER",
+        entity_id=payload.po_number,
+        action="WEBHOOK_INGEST",
+        performed_by="ERP_WEBHOOK",
+        timestamp=payload.order_date,
+        details=f"Ingested PO {payload.po_number} via real-time webhook (Vendor: {payload.vendor_id}, Total: ${payload.total_amount})",
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(po)
+
+    return IngestionSuccessResponse(
+        message=f"Purchase Order '{payload.po_number}' ingested successfully.",
+        entity_type="purchase_order",
+        entity_id=po.po_number,
+        data={
+            "po_number": po.po_number,
+            "vendor_id": po.vendor_id,
+            "sku": po.sku,
+            "quantity": po.quantity,
+            "unit_price": po.unit_price,
+            "total_amount": po.total_amount,
+            "currency": po.currency,
+            "status": po.status,
+        },
+    )
+
+
+@app.post(
+    "/ingest/receipt",
+    response_model=IngestionSuccessResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Real-Time Webhooks"],
+    summary="Ingest Goods Receipt event",
+)
+def ingest_goods_receipt(payload: GoodsReceiptIngestSchema, db: Session = Depends(get_db)):
+    """
+    Ingest a warehouse Goods Receipt event.
+    Normalizes identifiers, validates received quantities, and logs audit trail.
+    """
+    # Check for duplicate GR number
+    existing_gr = db.query(GoodsReceipt).filter(GoodsReceipt.gr_number == payload.gr_number).first()
+    if existing_gr:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Goods Receipt with gr_number '{payload.gr_number}' already exists in database.",
+        )
+
+    gr = GoodsReceipt(
+        gr_number=payload.gr_number,
+        po_number=payload.po_number,
+        vendor_id=payload.vendor_id,
+        sku=payload.sku,
+        quantity_received=payload.quantity_received,
+        received_date=payload.received_date,
+        received_by=payload.received_by,
+        condition_status=payload.condition_status,
+    )
+    db.add(gr)
+
+    # Audit log
+    audit = AuditLog(
+        entity_type="GOODS_RECEIPT",
+        entity_id=payload.gr_number,
+        action="WEBHOOK_INGEST",
+        performed_by="WAREHOUSE_DOCK",
+        timestamp=payload.received_date,
+        details=f"Ingested Goods Receipt {payload.gr_number} for PO {payload.po_number} (Qty: {payload.quantity_received})",
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(gr)
+
+    return IngestionSuccessResponse(
+        message=f"Goods Receipt '{payload.gr_number}' ingested successfully.",
+        entity_type="goods_receipt",
+        entity_id=gr.gr_number,
+        data={
+            "gr_number": gr.gr_number,
+            "po_number": gr.po_number,
+            "vendor_id": gr.vendor_id,
+            "sku": gr.sku,
+            "quantity_received": gr.quantity_received,
+            "condition_status": gr.condition_status,
+        },
+    )
+
+
+@app.post(
+    "/ingest/invoice",
+    response_model=IngestionSuccessResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Real-Time Webhooks"],
+    summary="Ingest Invoice event",
+)
+def ingest_invoice(payload: InvoiceIngestSchema, db: Session = Depends(get_db)):
+    """
+    Ingest a vendor Invoice event.
+    Normalizes currency and pricing, records invoice, and logs audit trail.
+    """
+    inv = Invoice(
+        invoice_number=payload.invoice_number,
+        po_number=payload.po_number,
+        vendor_id=payload.vendor_id,
+        vendor_name=payload.vendor_name,
+        sku=payload.sku,
+        quantity_billed=payload.quantity_billed,
+        unit_price=payload.unit_price,
+        total_amount=payload.total_amount,
+        currency=payload.currency,
+        invoice_date=payload.invoice_date,
+        due_date=payload.due_date,
+        payment_status=payload.payment_status,
+    )
+    db.add(inv)
+
+    # Audit log
+    audit = AuditLog(
+        entity_type="INVOICE",
+        entity_id=payload.invoice_number,
+        action="WEBHOOK_INGEST",
+        performed_by="AP_GATEWAY",
+        timestamp=payload.invoice_date,
+        details=f"Ingested Invoice {payload.invoice_number} from vendor {payload.vendor_id} (Total: ${payload.total_amount} {payload.currency})",
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(inv)
+
+    return IngestionSuccessResponse(
+        message=f"Invoice '{payload.invoice_number}' ingested successfully.",
+        entity_type="invoice",
+        entity_id=inv.invoice_number,
+        data={
+            "id": inv.id,
+            "invoice_number": inv.invoice_number,
+            "po_number": inv.po_number,
+            "vendor_id": inv.vendor_id,
+            "quantity_billed": inv.quantity_billed,
+            "unit_price": inv.unit_price,
+            "total_amount": inv.total_amount,
+            "currency": inv.currency,
+            "payment_status": inv.payment_status,
+        },
+    )
+
+
+# ============================================================================
+# BULK CSV EXPORT INGESTION ENDPOINTS
+# ============================================================================
+
+NORM_ENTITY_TYPES = {
+    "po": "purchase_order",
+    "pos": "purchase_order",
+    "purchase_order": "purchase_order",
+    "purchase_orders": "purchase_order",
+    "receipt": "goods_receipt",
+    "receipts": "goods_receipt",
+    "goods_receipt": "goods_receipt",
+    "goods_receipts": "goods_receipt",
+    "invoice": "invoice",
+    "invoices": "invoice",
+}
+
+
+@app.post(
+    "/ingest/csv/{entity_type}",
+    response_model=CSVIngestionResponse,
+    tags=["Bulk CSV Ingestion"],
+    summary="Bulk ingest ERP export CSV files",
+)
+async def ingest_csv(
+    entity_type: str,
+    file: UploadFile = File(..., description="CSV file from ERP bulk export"),
+    db: Session = Depends(get_db),
+):
+    """
+    Parse bulk ERP export CSV files.
+    Enforces per-row Pydantic validation, inserts valid rows, and captures row errors.
+    """
+    clean_type = entity_type.strip().lower()
+    canonical_type = NORM_ENTITY_TYPES.get(clean_type)
+
+    if not canonical_type:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported entity type '{entity_type}'. Allowed types: 'po', 'receipt', 'invoice'.",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded CSV file is empty.",
+        )
+
+    rows = parse_csv_content(content)
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="CSV file contains no valid data rows or empty headers.",
+        )
+
+    ingested_count = 0
+    errors: List[CSVRowError] = []
+
+    if canonical_type == "purchase_order":
+        for idx, row in enumerate(rows, start=1):
+            try:
+                schema = PurchaseOrderIngestSchema(**row)
+                # Check DB duplicate
+                if db.query(PurchaseOrder).filter(PurchaseOrder.po_number == schema.po_number).first():
+                    raise ValueError(f"Duplicate po_number '{schema.po_number}' already exists")
+
+                po = PurchaseOrder(
+                    po_number=schema.po_number,
+                    vendor_id=schema.vendor_id,
+                    vendor_name=schema.vendor_name,
+                    sku=schema.sku,
+                    description=schema.description,
+                    quantity=schema.quantity,
+                    unit_price=schema.unit_price,
+                    total_amount=schema.total_amount,
+                    currency=schema.currency,
+                    status=schema.status,
+                    order_date=schema.order_date,
+                    expected_delivery_date=schema.expected_delivery_date,
+                )
+                db.add(po)
+                ingested_count += 1
+            except Exception as e:
+                errors.append(CSVRowError(row_number=idx, raw_data=row, error=str(e)))
+
+    elif canonical_type == "goods_receipt":
+        for idx, row in enumerate(rows, start=1):
+            try:
+                schema = GoodsReceiptIngestSchema(**row)
+                # Check DB duplicate
+                if db.query(GoodsReceipt).filter(GoodsReceipt.gr_number == schema.gr_number).first():
+                    raise ValueError(f"Duplicate gr_number '{schema.gr_number}' already exists")
+
+                gr = GoodsReceipt(
+                    gr_number=schema.gr_number,
+                    po_number=schema.po_number,
+                    vendor_id=schema.vendor_id,
+                    sku=schema.sku,
+                    quantity_received=schema.quantity_received,
+                    received_date=schema.received_date,
+                    received_by=schema.received_by,
+                    condition_status=schema.condition_status,
+                )
+                db.add(gr)
+                ingested_count += 1
+            except Exception as e:
+                errors.append(CSVRowError(row_number=idx, raw_data=row, error=str(e)))
+
+    elif canonical_type == "invoice":
+        for idx, row in enumerate(rows, start=1):
+            try:
+                schema = InvoiceIngestSchema(**row)
+                inv = Invoice(
+                    invoice_number=schema.invoice_number,
+                    po_number=schema.po_number,
+                    vendor_id=schema.vendor_id,
+                    vendor_name=schema.vendor_name,
+                    sku=schema.sku,
+                    quantity_billed=schema.quantity_billed,
+                    unit_price=schema.unit_price,
+                    total_amount=schema.total_amount,
+                    currency=schema.currency,
+                    invoice_date=schema.invoice_date,
+                    due_date=schema.due_date,
+                    payment_status=schema.payment_status,
+                )
+                db.add(inv)
+                ingested_count += 1
+            except Exception as e:
+                errors.append(CSVRowError(row_number=idx, raw_data=row, error=str(e)))
+
+    if ingested_count > 0:
+        db.add(AuditLog(
+            entity_type=canonical_type.upper(),
+            entity_id=f"CSV_BATCH_{file.filename}",
+            action="CSV_BULK_INGEST",
+            performed_by="ERP_BATCH_JOB",
+            details=f"Bulk ingested {ingested_count}/{len(rows)} records from '{file.filename}'. Failed: {len(errors)}",
+        ))
+        db.commit()
+
+    res_status = "success" if len(errors) == 0 else ("partial_success" if ingested_count > 0 else "failed")
+    return CSVIngestionResponse(
+        status=res_status,
+        entity_type=canonical_type,
+        total_rows=len(rows),
+        ingested_count=ingested_count,
+        failed_count=len(errors),
+        errors=errors,
+        message=f"Processed {len(rows)} rows: {ingested_count} ingested, {len(errors)} failed.",
+    )

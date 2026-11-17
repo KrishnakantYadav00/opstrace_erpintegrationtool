@@ -48,6 +48,31 @@ The synthetic generator (`seed_data.py`) creates 50–100 procurement flows cont
 
 ---
 
+## Step 2: Transaction Ingestion Layer (REST API + Bulk CSV)
+
+The ingestion layer simulates real-time ERP event webhooks and end-of-day batch file exports via FastAPI and Pydantic.
+
+### Endpoints
+
+| Method | Endpoint | Description | Payload Format |
+|---|---|---|---|
+| `GET` | `/health` | API & database connectivity check | N/A |
+| `POST` | `/ingest/po` | Real-time webhook for Purchase Orders | JSON (`PurchaseOrderIngestSchema`) |
+| `POST` | `/ingest/receipt` | Real-time webhook for Goods Receipts | JSON (`GoodsReceiptIngestSchema`) |
+| `POST` | `/ingest/invoice` | Real-time webhook for Vendor Invoices | JSON (`InvoiceIngestSchema`) |
+| `POST` | `/ingest/csv/{entity_type}` | Bulk CSV batch export ingestion (`po`, `receipt`, `invoice`) | Multipart Form File (`.csv`) |
+
+### Data Normalization & Validation (Pydantic)
+- **Whitespace Sanitization**: Strips leading/trailing spaces from `po_number`, `vendor_id`, `sku`, `gr_number`, and `invoice_number`.
+- **Currency Standardization**: Normalizes currency codes to uppercase 3-letter ISO standards (e.g., `" usd "` -> `"USD"`).
+- **Auto-Calculated Totals**: Automatically calculates `total_amount = round(quantity * unit_price, 2)` if omitted in payload.
+- **Flexible Date Parsing**: Accepts ISO timestamps (`2026-03-01T10:00:00Z`), standard timestamps (`2026-03-01 10:00:00`), and date strings (`2026-03-01`).
+- **Strict Business Constraints**: Enforces positive quantities (`quantity > 0`) and non-negative pricing (`unit_price >= 0`).
+- **Flexible CSV Header Mapping**: Case-insensitive aliases (e.g. `PO Number`, `Supplier ID`, `Item SKU`, `Qty`, `Price`).
+- **Audit Trail**: Every webhook or bulk CSV ingestion logs an entry in `audit_logs`.
+
+---
+
 ## Quick Start
 
 ### 1. Requirements

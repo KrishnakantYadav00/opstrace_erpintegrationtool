@@ -116,8 +116,15 @@ def cmd_exceptions(args):
 def cmd_run_tests(args):
     """Run pytest test suite."""
     print_header("Executing Automated Pytest Suite")
-    result = subprocess.run([sys.executable, "-m", "pytest", "-v", "tests/test_erp_mvp.py"])
+    result = subprocess.run([sys.executable, "-m", "pytest", "-v", "tests/"])
     sys.exit(result.returncode)
+
+
+def cmd_serve(args):
+    """Start FastAPI ingestion server using uvicorn."""
+    import uvicorn
+    print_header(f"Starting OpsTrace Ingestion Server on {args.host}:{args.port}")
+    uvicorn.run("app:app", host=args.host, port=args.port, reload=args.reload)
 
 
 def main():
@@ -137,6 +144,12 @@ def main():
         "QTY_MISMATCH_3WAY", "PRICE_VARIANCE", "DUPLICATE_INVOICE", "GHOST_RECEIPT_MISSING_GR", "MISSING_PO"
     ], help="Filter by exception type")
 
+    # serve
+    serve_parser = subparsers.add_parser("serve", help="Start FastAPI REST server")
+    serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="Host address (default: 127.0.0.1)")
+    serve_parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
+    serve_parser.add_argument("--reload", action="store_true", help="Enable auto-reload on file changes")
+
     # test
     subparsers.add_parser("test", help="Run automated test suite (pytest)")
 
@@ -147,6 +160,8 @@ def main():
         cmd_inspect_po(args)
     elif args.command == "exceptions":
         cmd_exceptions(args)
+    elif args.command == "serve":
+        cmd_serve(args)
     elif args.command == "test":
         cmd_run_tests(args)
 
