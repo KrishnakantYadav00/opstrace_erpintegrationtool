@@ -1,7 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Float, DateTime, Text, Index
 from sqlalchemy.orm import relationship, foreign
 from database import Base
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
 
 
 class PurchaseOrder(Base):
@@ -20,8 +24,8 @@ class PurchaseOrder(Base):
     status = Column(String(50), default="ISSUED", nullable=False)  # ISSUED, PARTIALLY_RECEIVED, RECEIVED, CLOSED, CANCELLED
     order_date = Column(DateTime, nullable=False)
     expected_delivery_date = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
     # Cross-table ORM links via po_number
     goods_receipts = relationship(
@@ -59,7 +63,7 @@ class GoodsReceipt(Base):
     received_date = Column(DateTime, nullable=False)
     received_by = Column(String(100), default="Warehouse Intake", nullable=False)
     condition_status = Column(String(50), default="ACCEPTED", nullable=False)  # ACCEPTED, DAMAGED, REJECTED, SHORTAGE
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
 
     def __repr__(self):
         return f"<GoodsReceipt(gr_number='{self.gr_number}', po_number='{self.po_number}', qty_received={self.quantity_received})>"
@@ -81,7 +85,7 @@ class Invoice(Base):
     invoice_date = Column(DateTime, nullable=False)
     due_date = Column(DateTime, nullable=True)
     payment_status = Column(String(50), default="PENDING_MATCH", nullable=False)  # PENDING_MATCH, APPROVED, REJECTED, ON_HOLD, PAID
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
 
     def __repr__(self):
         return f"<Invoice(invoice_number='{self.invoice_number}', po_number='{self.po_number}', qty_billed={self.quantity_billed}, unit_price={self.unit_price}, total={self.total_amount})>"
@@ -106,7 +110,7 @@ class ExceptionRecord(Base):
     severity = Column(String(20), default="MEDIUM", nullable=False)  # LOW, MEDIUM, HIGH, CRITICAL
     discrepancy_details = Column(Text, nullable=True)  # Structured description or JSON of the variance
     status = Column(String(50), default="OPEN", nullable=False)  # OPEN, UNDER_REVIEW, RESOLVED, DISMISSED
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
     resolved_at = Column(DateTime, nullable=True)
 
     def __repr__(self):
@@ -121,7 +125,7 @@ class AuditLog(Base):
     entity_id = Column(String(100), nullable=False, index=True)
     action = Column(String(100), nullable=False)  # CREATED, SEEDED_WITH_ANOMALY, MATCH_FAILED, AUDIT_FLAG
     performed_by = Column(String(100), default="SYSTEM_SEEDER", nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    timestamp = Column(DateTime, default=utc_now, nullable=False)
     details = Column(Text, nullable=True)
 
     def __repr__(self):
