@@ -190,6 +190,37 @@ Every state transition records an append-only row containing:
 
 ---
 
+## Step 6: Investigation Dashboard & Pytest Suite
+
+### React Workbench (3-Pane Layout)
+A dedicated operations operator workbench built with React, Vite, and Lucide icons:
+
+1. **Exception Queue (Left Pane)**
+   - Filterable list sorted by financial impact (`variance_amount` descending) and severity.
+   - Real-time search across PO numbers, invoices, vendors, and exception codes.
+   - Quick filters for severity (`High`, `Medium`, `Low`) and lifecycle status (`Detected`, `AI Analyzed`, `Approved`).
+
+2. **Evidence & Timeline (Center Pane)**
+   - **Side-by-side Visual Comparison**: Purchase Order vs. Goods Receipt vs. Invoice.
+   - **Discrepancy Highlighting**: Mismatched quantities and unit prices are highlighted with red alerts and contrast styling.
+   - **Chronological Immutable Audit Log**: Complete event timeline displaying timestamps, actors (`SYSTEM`, `AI_AGENT`, human reviewer), state transitions (`before` $\rightarrow$ `after`), and auditable notes.
+
+3. **AI Copilot & Action Bar (Right Pane)**
+   - **AI Operations Analyst**: Plain-English root cause summary quantifying overbilling risk, 2–3 concrete operational next steps, and a ready-to-send vendor email snippet with one-click copy.
+   - **One-Click Human Decision Action Bar**:
+     - `Approve Override` (`OVERRIDE_AND_PAY`): Authorizes payment and transitions invoice to `APPROVED`.
+     - `Request Credit Memo` (`REQUEST_CREDIT_MEMO`): Puts invoice on hold and flags credit request.
+     - `Hold Payment & Escalate` (`ESCALATE`): Routes to senior category management.
+
+### Pytest Edge Case Suite (`tests/test_step6_comprehensive_edge_cases.py`)
+Automated tests validating the exact edge cases:
+- **Exact 3-Way Match**: Confirms 0 exceptions generated when PO, GR, and Invoice perfectly align.
+- **Partial Delivery Mismatch**: Confirms `QUANTITY_MISMATCH` is flagged with exact variance and document snapshots.
+- **Duplicate Invoice Ingestion**: Confirms `DUPLICATE_INVOICE` flagged on identical vendor and amount within 48h.
+- **Human Approval Lifecycle**: Confirms human decision properly updates exception status, invoice status, and appends to the immutable audit log.
+
+---
+
 ## Quick Start
 
 ### 1. Requirements
@@ -207,8 +238,26 @@ Options:
 - `--count <int>`: Number of flows to generate (e.g. `--count 100`).
 - `--seed <int>`: Random seed for deterministic reproducibility.
 
-### 3. Verify Integrity & Failure Modes
-Run the verification script to inspect dataset statistics and anomaly reports:
+### 4. Run Automated Pytest Suite
+Run the 52 comprehensive unit and integration tests:
 ```bash
-python verify_seed.py
+python cli.py test
+```
+Or directly:
+```bash
+python -m pytest -v
+```
+
+### 5. Launch Operator Workbench & API Server
+Start the backend server (FastAPI + APScheduler + embedded React UI):
+```bash
+python cli.py serve --port 8000
+```
+- **Operator React Workbench**: Open `http://127.0.0.1:8000/ui` in your browser.
+- **Interactive OpenAPI Docs**: Open `http://127.0.0.1:8000/docs`.
+
+To run Vite in standalone hot-reload dev mode:
+```bash
+cd frontend
+npm run dev
 ```

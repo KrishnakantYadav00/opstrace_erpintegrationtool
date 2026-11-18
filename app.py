@@ -47,12 +47,30 @@ async def lifespan(app: FastAPI):
     stop_scheduler()
 
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="OpsTrace ERP Transaction Ingestion API",
     description="Simulates ERP real-time event webhooks and bulk end-of-day CSV batch ingestion.",
     version="1.0.0",
     lifespan=lifespan,
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+import os
+from fastapi.staticfiles import StaticFiles
+
+frontend_dist = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
+if os.path.exists(frontend_dist):
+    app.mount("/ui", StaticFiles(directory=frontend_dist, html=True), name="ui")
 
 
 @app.get("/health", tags=["Health"])
