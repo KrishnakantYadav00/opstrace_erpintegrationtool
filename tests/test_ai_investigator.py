@@ -155,11 +155,12 @@ def test_investigation_persisted_to_db_and_audit(db):
         db.query(AuditLog)
         .filter(
             AuditLog.entity_id == "EXC-2026-0001",
-            AuditLog.action == "AI_INVESTIGATION_COMPLETED",
+            AuditLog.after_state == "AI_ANALYZED",
         )
         .first()
     )
     assert audit is not None
+    assert audit.performed_by == "AI_AGENT"
 
 
 # ============================================================================

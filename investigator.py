@@ -330,16 +330,25 @@ def investigate_exception(
     if report is None:
         report = generate_rule_based_fallback_analysis(context)
 
-    # 4. Persist to ExceptionRecord and write AuditLog
+    # 4. Persist to ExceptionRecord and write immutable AuditLog for state transition
+    before_state = exc.status or "DETECTED"
     exc.ai_investigation = json.dumps(report.model_dump())
-    exc.status = "UNDER_REVIEW"
+    exc.status = "AI_ANALYZED"
 
     audit = AuditLog(
         entity_type="EXCEPTION",
         entity_id=exc.exception_code,
-        action="AI_INVESTIGATION_COMPLETED",
-        performed_by=f"AI_ANALYST_{report.model_name.upper()}",
-        details=f"AI Investigation completed. Root Cause: {report.root_cause_summary[:150]}... Actions: {len(report.recommended_actions)}",
+        action="STATE_TRANSITION",
+        performed_by="AI_AGENT",
+        before_state=before_state,
+        after_state="AI_ANALYZED",
+        timestamp=datetime.now(timezone.utc),
+        details=json.dumps({
+            "action_taken": "AI_ROOT_CAUSE_ANALYSIS",
+            "model_name": report.model_name,
+            "root_cause_summary": report.root_cause_summary,
+            "recommended_actions": report.recommended_actions,
+        }),
     )
     db.add(audit)
     db.commit()
@@ -357,7 +366,7 @@ def investigate_batch(
     """
     Batch investigate open exceptions.
     """
-    query = db.query(ExceptionRecord).filter(ExceptionRecord.status.in_(["OPEN", "UNDER_REVIEW"]))
+    query = db.query(ExceptionRecord).filter(ExceptionRecord.status.in_(["OPEN", "DETECTED", "UNDER_REVIEW"]))
     if severity_filter:
         query = query.filter(ExceptionRecord.severity == severity_filter.capitalize())
 

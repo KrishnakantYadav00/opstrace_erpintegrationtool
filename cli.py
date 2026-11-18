@@ -156,6 +156,64 @@ def cmd_investigate(args):
         db.close()
 
 
+def cmd_resolve(args):
+    """Resolve an exception via human decision."""
+    from workflow import resolve_exception_workflow
+    db = SessionLocal()
+    print_header(f"Resolving Exception: {args.id_or_code}")
+    try:
+        res = resolve_exception_workflow(
+            db=db,
+            exception_id_or_code=args.id_or_code,
+            action_taken=args.action,
+            user_id=args.user,
+            notes=args.notes,
+        )
+        print(f"  Status:          {res['status'].upper()}")
+        print(f"  Exception:       {res['exception_code']}")
+        print(f"  Action Taken:    {res['action_taken']}")
+        print(f"  State Change:    {res['before_state']} -> {res['after_state']}")
+        print(f"  Resolved By:     {res['user_id']}")
+        if res['invoice_payment_status']:
+            print(f"  Invoice Status:  {res['invoice_payment_status']}")
+        print(f"  Audit Entry ID:  #{res['audit_log_id']}")
+        print(f"\n  Notes: {res['notes']}")
+    except Exception as e:
+        print(f"  [!] Resolution failed: {e}")
+    finally:
+        db.close()
+
+
+def cmd_audit(args):
+    """View immutable audit trail for an exception or entity."""
+    from workflow import get_audit_trail_for_entity
+    db = SessionLocal()
+    print_header(f"Immutable Audit Trail: {args.entity_id}")
+    trail = get_audit_trail_for_entity(db, entity_id=args.entity_id)
+    if not trail:
+        print(f"  No audit entries found for '{args.entity_id}'.")
+    else:
+        for idx, entry in enumerate(trail, start=1):
+            before = entry['before_state'] or 'NONE'
+            after = entry['after_state'] or 'N/A'
+            print(f"  [{idx}] {entry['timestamp']} | Actor: {entry['performed_by']:<18} | Action: {entry['action']}")
+            if entry['before_state'] or entry['after_state']:
+                print(f"      Transition: {before} -> {after}")
+            if entry['details']:
+                print(f"      Details: {entry['details']}")
+    db.close()
+
+
+def cmd_sweep(args):
+    """Trigger background reconciliation sweep immediately."""
+    from scheduler import run_scheduled_reconciliation_sweep
+    print_header("Executing 5-Minute Reconciliation Sweep")
+    summary = run_scheduled_reconciliation_sweep()
+    print(f"  Invoices Scanned: {summary.get('total_invoices_scanned')}")
+    print(f"  POs Scanned:      {summary.get('total_pos_scanned')}")
+    print(f"  Exceptions Found: {summary.get('exceptions_generated')}")
+
+
 def cmd_run_tests(args):
     """Run pytest test suite."""
     print_header("Executing Automated Pytest Suite")
@@ -194,6 +252,22 @@ def main():
     inv_parser = subparsers.add_parser("investigate", help="Run AI Root-Cause Investigation on an exception")
     inv_parser.add_argument("exception_code", type=str, help="Exception code (e.g. EXC-2026-0001)")
 
+    # resolve
+    res_parser = subparsers.add_parser("resolve", help="Resolve an exception with human decision")
+    res_parser.add_argument("id_or_code", type=str, help="Exception ID or code (e.g. EXC-2026-0001)")
+    res_parser.add_argument("--action", type=str, required=True, choices=[
+        "REQUEST_CREDIT_MEMO", "OVERRIDE_AND_PAY", "ESCALATE", "DISMISS"
+    ], help="Action taken")
+    res_parser.add_argument("--user", type=str, required=True, help="User ID or email of human reviewer")
+    res_parser.add_argument("--notes", type=str, required=True, help="Auditable explanation for resolution")
+
+    # audit
+    aud_parser = subparsers.add_parser("audit", help="View immutable audit trail for an entity")
+    aud_parser.add_argument("entity_id", type=str, help="Entity ID (e.g. EXC-2026-0001 or INV-2026-0048)")
+
+    # sweep
+    subparsers.add_parser("sweep", help="Trigger reconciliation sweep manually")
+
     # serve
     serve_parser = subparsers.add_parser("serve", help="Start FastAPI REST server")
     serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="Host address (default: 127.0.0.1)")
@@ -214,6 +288,12 @@ def main():
         cmd_reconcile(args)
     elif args.command == "investigate":
         cmd_investigate(args)
+    elif args.command == "resolve":
+        cmd_resolve(args)
+    elif args.command == "audit":
+        cmd_audit(args)
+    elif args.command == "sweep":
+        cmd_sweep(args)
     elif args.command == "serve":
         cmd_serve(args)
     elif args.command == "test":

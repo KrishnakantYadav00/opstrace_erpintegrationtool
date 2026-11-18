@@ -22,17 +22,29 @@ from schemas import (
     CSVRowError,
     InvestigationReport,
     BatchInvestigationResponse,
+    ResolveExceptionRequest,
+    ResolveExceptionResponse,
+    AuditTrailEntry,
 )
 from csv_parser import parse_csv_content
 from engine import reconcile_invoice, reconcile_all
 from investigator import investigate_exception, investigate_batch
+from workflow import resolve_exception_workflow, get_audit_trail_for_entity
+from scheduler import (
+    start_scheduler,
+    stop_scheduler,
+    get_scheduler_status,
+    run_scheduled_reconciliation_sweep,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Ensure database tables exist on server startup."""
+    """Ensure database tables exist on server startup and initialize background scheduler."""
     init_db()
+    start_scheduler(interval_minutes=5)
     yield
+    stop_scheduler()
 
 
 app = FastAPI(
@@ -550,3 +562,86 @@ def get_investigation(exception_code: str, db: Session = Depends(get_db)):
     # Run investigation if not yet cached
     report = investigate_exception(db, exception_code)
     return report
+
+
+# ============================================================================
+# STEP 5: HUMAN-IN-THE-LOOP RESOLUTION & AUDIT LOGGING ENDPOINTS
+# ============================================================================
+
+@app.post(
+    "/exceptions/{id}/resolve",
+    response_model=ResolveExceptionResponse,
+    tags=["Human-in-the-Loop Workflow"],
+    summary="Human reviewer resolves an exception with accountable state transition and audit logging",
+)
+def resolve_exception_endpoint(
+    id: str,
+    payload: ResolveExceptionRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Accepts human reviewer decision:
+    - action_taken: REQUEST_CREDIT_MEMO, OVERRIDE_AND_PAY, ESCALATE, DISMISS
+    - user_id: Reviewer identifier
+    - notes: Auditable justification
+    Updates state machine and appends an immutable row to audit_logs.
+    """
+    try:
+        result = resolve_exception_workflow(
+            db=db,
+            exception_id_or_code=id,
+            action_taken=payload.action_taken,
+            user_id=payload.user_id,
+            notes=payload.notes,
+        )
+        return ResolveExceptionResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Resolution failed: {str(e)}")
+
+
+@app.get(
+    "/exceptions/{id}/audit",
+    response_model=List[AuditTrailEntry],
+    tags=["Audit Trail"],
+    summary="Get immutable audit trail of state transitions for an exception",
+)
+def get_exception_audit_trail(id: str, db: Session = Depends(get_db)):
+    """
+    Retrieve chronologically ordered immutable audit trail for an exception.
+    """
+    # Resolve code if numeric id passed
+    code = id
+    if id.isdigit():
+        exc = db.query(ExceptionRecord).filter(ExceptionRecord.id == int(id)).first()
+        if exc:
+            code = exc.exception_code
+
+    trail = get_audit_trail_for_entity(db, entity_id=code, entity_type="EXCEPTION")
+    return trail
+
+
+# ============================================================================
+# AUTOMATION / SCHEDULER ENDPOINTS
+# ============================================================================
+
+@app.get(
+    "/scheduler/status",
+    tags=["Automation"],
+    summary="Get operational status of background reconciliation sweeper",
+)
+def get_scheduler_status_endpoint():
+    """Returns background APScheduler operational status and next sweep time."""
+    return get_scheduler_status()
+
+
+@app.post(
+    "/scheduler/sweep",
+    tags=["Automation"],
+    summary="Manually trigger immediate 5-minute reconciliation sweep",
+)
+def trigger_sweep_endpoint():
+    """Executes reconciliation sweep immediately and returns summary metrics."""
+    summary = run_scheduled_reconciliation_sweep()
+    return {"status": "success", "summary": summary}

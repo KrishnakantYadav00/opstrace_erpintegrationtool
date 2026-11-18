@@ -126,8 +126,10 @@ class AuditLog(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     entity_type = Column(String(50), nullable=False, index=True)  # PURCHASE_ORDER, GOODS_RECEIPT, INVOICE, EXCEPTION
     entity_id = Column(String(100), nullable=False, index=True)
-    action = Column(String(100), nullable=False)  # CREATED, SEEDED_WITH_ANOMALY, MATCH_FAILED, AUDIT_FLAG
-    performed_by = Column(String(100), default="SYSTEM_SEEDER", nullable=False)
+    action = Column(String(100), nullable=False)  # CREATED, STATE_TRANSITION, EXCEPTION_RESOLVED, etc.
+    performed_by = Column(String(100), default="SYSTEM_SEEDER", nullable=False)  # SYSTEM, AI_AGENT, or human user_id
+    before_state = Column(String(50), nullable=True, index=True)  # e.g. DETECTED, AI_ANALYZED
+    after_state = Column(String(50), nullable=True, index=True)  # e.g. AI_ANALYZED, APPROVED_FOR_PAYMENT
     timestamp = Column(DateTime, default=utc_now, nullable=False)
     details = Column(Text, nullable=True)
 

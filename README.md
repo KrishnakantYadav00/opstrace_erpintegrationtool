@@ -152,6 +152,44 @@ The LLM is forced via Pydantic structured output to return:
 
 ---
 
+## Step 5: Human-in-the-Loop Workflow & Immutable Audit Trail
+
+OpsTrace provides accountability around all financial decisions through an explicit state machine and an immutable, append-only audit trail.
+
+### State Machine Lifecycle
+```mermaid
+stateDiagram-v2
+    [*] --> DETECTED: Rule Engine flags discrepancy (SYSTEM)
+    DETECTED --> AI_ANALYZED: Root-cause investigated (AI_AGENT)
+    AI_ANALYZED --> APPROVED_FOR_PAYMENT: OVERRIDE_AND_PAY (Human Reviewer)
+    AI_ANALYZED --> CREDIT_MEMO_REQUESTED: REQUEST_CREDIT_MEMO (Human Reviewer)
+    AI_ANALYZED --> ESCALATED: ESCALATE (Human Reviewer)
+    AI_ANALYZED --> DISMISSED: DISMISS (Human Reviewer)
+    APPROVED_FOR_PAYMENT --> [*]
+    CREDIT_MEMO_REQUESTED --> [*]
+    DISMISSED --> [*]
+```
+
+### Action Endpoint (`POST /exceptions/{id}/resolve`)
+Allows authorized human reviewers to resolve exceptions with full accountability:
+- **`OVERRIDE_AND_PAY`**: Transitions state to `APPROVED_FOR_PAYMENT` and automatically approves the linked invoice (`invoice.payment_status = "APPROVED"`).
+- **`REQUEST_CREDIT_MEMO`**: Transitions state to `CREDIT_MEMO_REQUESTED` and places invoice on hold (`invoice.payment_status = "ON_HOLD"`).
+- **`ESCALATE`**: Transitions state to `ESCALATED` for senior executive / procurement category review.
+- **`DISMISS`**: Transitions state to `DISMISSED`.
+
+### Immutable Audit Trail (`audit_logs`)
+Every state transition records an append-only row containing:
+- `timestamp`: UTC datetime
+- `performed_by`: `SYSTEM`, `AI_AGENT`, or human reviewer (`user_id`)
+- `before_state` & `after_state`: Explicit state trajectory
+- `details`: Reviewer notes, action rationale, and linked document metadata.
+
+### Automated 5-Minute Background Sweep (`APScheduler`)
+- Runs in the background every 5 minutes to detect time-based anomalies (such as approval SLA breaches and overdue unreceived orders).
+- Integrated into FastAPI lifecycle (`lifespan`) and accessible via CLI `python cli.py sweep` or API `POST /scheduler/sweep`.
+
+---
+
 ## Quick Start
 
 ### 1. Requirements

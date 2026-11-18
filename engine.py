@@ -385,7 +385,7 @@ def record_exception_if_not_exists(
             ExceptionRecord.exception_type == discrepancy.exception_type,
             ExceptionRecord.po_number == discrepancy.po_number,
             ExceptionRecord.invoice_number == discrepancy.invoice_number,
-            ExceptionRecord.status == "OPEN",
+            ExceptionRecord.status.in_(["OPEN", "DETECTED", "UNDER_REVIEW", "AI_ANALYZED"]),
         )
         .first()
     )
@@ -406,18 +406,27 @@ def record_exception_if_not_exists(
         variance_amount=discrepancy.variance_amount,
         raw_snapshots=raw_snapshots,
         discrepancy_details=json.dumps(discrepancy.details),
-        status="OPEN",
+        status="DETECTED",
         created_at=utc_now(),
     )
     db.add(record)
 
-    # Audit log
+    # Immutable Audit Log for initial state transition
     audit = AuditLog(
         entity_type="EXCEPTION",
         entity_id=code,
-        action="DETERMINISTIC_EXCEPTION_GENERATED",
-        performed_by="RECONCILIATION_ENGINE",
-        details=f"Raised {discrepancy.severity} severity exception '{discrepancy.exception_type}' (Variance: ${discrepancy.variance_amount}): {discrepancy.details.get('description')}",
+        action="STATE_TRANSITION",
+        performed_by="SYSTEM",
+        before_state=None,
+        after_state="DETECTED",
+        timestamp=utc_now(),
+        details=json.dumps({
+            "action_taken": "RULE_EVALUATION_FAILED",
+            "rule": discrepancy.details.get("rule"),
+            "description": discrepancy.details.get("description"),
+            "variance_amount": discrepancy.variance_amount,
+            "severity": discrepancy.severity,
+        }),
     )
     db.add(audit)
     db.commit()

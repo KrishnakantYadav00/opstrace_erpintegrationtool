@@ -262,3 +262,62 @@ class BatchInvestigationResponse(BaseModel):
     total_investigated: int
     reports: List[InvestigationReport]
     message: str
+
+
+# ============================================================================
+# STEP 5: HUMAN-IN-THE-LOOP WORKFLOW & AUDIT SCHEMAS
+# ============================================================================
+
+class ResolveExceptionRequest(BaseModel):
+    action_taken: str = Field(
+        ...,
+        description="Resolution action taken by human reviewer (e.g. REQUEST_CREDIT_MEMO, OVERRIDE_AND_PAY, ESCALATE, DISMISS)",
+    )
+    user_id: str = Field(
+        ...,
+        min_length=2,
+        description="Identifier or email of the human reviewer (e.g. sarah.chen@enterprise.com)",
+    )
+    notes: str = Field(
+        ...,
+        min_length=3,
+        description="Auditable explanation of why this financial action was approved or taken.",
+    )
+
+    @field_validator("action_taken", mode="before")
+    @classmethod
+    def normalize_action(cls, v: Any) -> str:
+        cleaned = clean_string(v)
+        if not cleaned:
+            raise ValueError("action_taken cannot be empty")
+        upper_act = cleaned.upper().replace(" ", "_")
+        allowed = {"REQUEST_CREDIT_MEMO", "OVERRIDE_AND_PAY", "ESCALATE", "DISMISS", "RESOLVE"}
+        if upper_act not in allowed:
+            raise ValueError(f"Invalid action_taken '{upper_act}'. Allowed actions: {', '.join(sorted(allowed))}")
+        return upper_act
+
+
+class ResolveExceptionResponse(BaseModel):
+    status: str = "success"
+    exception_code: str
+    action_taken: str
+    before_state: str
+    after_state: str
+    user_id: str
+    resolved_at: str
+    invoice_number: Optional[str] = None
+    invoice_payment_status: Optional[str] = None
+    notes: str
+    message: str
+
+
+class AuditTrailEntry(BaseModel):
+    id: int
+    entity_type: str
+    entity_id: str
+    action: str
+    performed_by: str
+    before_state: Optional[str] = None
+    after_state: Optional[str] = None
+    timestamp: str
+    details: Optional[Any] = None
