@@ -18,7 +18,10 @@ import {
   Layers
 } from 'lucide-react';
 
-const API_BASE = 'http://127.0.0.1:8000';
+// In Vite dev mode (port 5173), proxy or point to backend; in production or FastAPI mount, use relative origin
+const API_BASE = typeof window !== 'undefined' && window.location.port === '5173'
+  ? 'http://127.0.0.1:8000'
+  : '';
 
 export default function App() {
   const [exceptions, setExceptions] = useState([]);

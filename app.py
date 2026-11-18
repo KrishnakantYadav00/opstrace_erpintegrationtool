@@ -67,10 +67,19 @@ app.add_middleware(
 
 import os
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 
 frontend_dist = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
 if os.path.exists(frontend_dist):
     app.mount("/ui", StaticFiles(directory=frontend_dist, html=True), name="ui")
+    assets_dir = os.path.join(frontend_dist, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+
+@app.get("/", include_in_schema=False)
+def root_redirect():
+    return RedirectResponse(url="/ui/")
 
 
 @app.get("/health", tags=["Health"])
