@@ -113,6 +113,45 @@ When an anomaly is flagged, OpsTrace creates an `ExceptionRecord` with:
 
 ---
 
+## Step 4: AI Investigation & Root-Cause Engine
+
+Once the deterministic rule engine flags an exception and captures linked snapshots, OpsTrace passes the structured context to an **AI Operations Analyst** (powered by Gemini 3.8 Flash via `google-genai`).
+
+### Context Assembly
+The engine bundles the PO, Goods Receipt, Invoice, and rule violation diagnostics into a clean JSON prompt:
+```json
+{
+  "exception_code": "EXC-2026-0001",
+  "exception_type": "QTY_MISMATCH_3WAY",
+  "variance_amount": 2300.0,
+  "linked_documents": {
+    "purchase_order": { ... },
+    "goods_receipt": { ... },
+    "invoice": { ... }
+  }
+}
+```
+
+### Structured Output Schema (`InvestigationReport`)
+The LLM is forced via Pydantic structured output to return:
+- `root_cause_summary`: Plain-English explanation of what broke and the financial exposure.
+- `recommended_actions`: 2–3 concrete operational next steps (e.g. request credit memo, hold invoice, warehouse dock check).
+- `draft_communication`: A ready-to-send email snippet addressed to the vendor or internal approver.
+
+### API & CLI Usage
+- **Investigate Exception via API**:
+  `POST /investigate/{exception_code}`
+- **Retrieve Cached Report**:
+  `GET /investigate/{exception_code}`
+- **Batch Investigation**:
+  `POST /investigate/batch?limit=5`
+- **CLI Command**:
+  ```bash
+  python cli.py investigate EXC-2026-0001
+  ```
+
+---
+
 ## Quick Start
 
 ### 1. Requirements

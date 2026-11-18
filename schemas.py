@@ -230,3 +230,35 @@ class CSVIngestionResponse(BaseModel):
     failed_count: int
     errors: List[CSVRowError] = []
     message: str
+
+
+# ============================================================================
+# STEP 4: AI INVESTIGATION SCHEMAS
+# ============================================================================
+
+class InvestigationReport(BaseModel):
+    exception_code: str = Field(..., description="Unique exception identifier")
+    exception_type: str = Field(..., description="Exception type code")
+    severity: str = Field("Medium", description="Severity level")
+    variance_amount: float = Field(0.0, description="Quantified monetary risk or variance")
+    root_cause_summary: str = Field(
+        ...,
+        description="Plain-English explanation of what broke (e.g. 'Invoice #409 bills for 100 units, but Warehouse Receipt #88 confirms only 80 units were delivered, creating a $400 overbilling risk.')",
+    )
+    recommended_actions: List[str] = Field(
+        ...,
+        description="2–3 concrete next steps (e.g. 'Request credit memo for 20 units', 'Ping warehouse manager to verify unlogged pallets')",
+    )
+    draft_communication: str = Field(
+        ...,
+        description="A ready-to-send email snippet to the vendor or internal approver.",
+    )
+    model_name: Optional[str] = Field("gemini-3.8-flash", description="LLM model used for analysis")
+    investigated_at: Optional[str] = Field(None, description="ISO timestamp of when the analysis occurred")
+
+
+class BatchInvestigationResponse(BaseModel):
+    status: str
+    total_investigated: int
+    reports: List[InvestigationReport]
+    message: str

@@ -129,6 +129,33 @@ def cmd_reconcile(args):
     db.close()
 
 
+def cmd_investigate(args):
+    """Run AI operations analyst on a flagged exception."""
+    from investigator import investigate_exception
+    db = SessionLocal()
+    print_header(f"AI Root-Cause Investigation: {args.exception_code}")
+    try:
+        report = investigate_exception(db, args.exception_code)
+        print(f"  Exception Code:  {report.exception_code} [{report.severity}]")
+        print(f"  Exception Type:  {report.exception_type}")
+        print(f"  Variance Risk:   ${report.variance_amount:.2f}")
+        print(f"  Analyst Model:   {report.model_name}")
+        print("\n  ROOT-CAUSE SUMMARY:")
+        print(f"    {report.root_cause_summary}")
+
+        print("\n  RECOMMENDED ACTIONS:")
+        for idx, act in enumerate(report.recommended_actions, start=1):
+            print(f"    [{idx}] {act}")
+
+        print("\n  DRAFT COMMUNICATION:")
+        for line in report.draft_communication.splitlines():
+            print(f"    {line}")
+    except Exception as e:
+        print(f"  [!] Investigation failed: {e}")
+    finally:
+        db.close()
+
+
 def cmd_run_tests(args):
     """Run pytest test suite."""
     print_header("Executing Automated Pytest Suite")
@@ -163,6 +190,10 @@ def main():
     # reconcile
     subparsers.add_parser("reconcile", help="Run deterministic 3-way reconciliation scan across database")
 
+    # investigate
+    inv_parser = subparsers.add_parser("investigate", help="Run AI Root-Cause Investigation on an exception")
+    inv_parser.add_argument("exception_code", type=str, help="Exception code (e.g. EXC-2026-0001)")
+
     # serve
     serve_parser = subparsers.add_parser("serve", help="Start FastAPI REST server")
     serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="Host address (default: 127.0.0.1)")
@@ -181,6 +212,8 @@ def main():
         cmd_exceptions(args)
     elif args.command == "reconcile":
         cmd_reconcile(args)
+    elif args.command == "investigate":
+        cmd_investigate(args)
     elif args.command == "serve":
         cmd_serve(args)
     elif args.command == "test":

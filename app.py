@@ -20,9 +20,12 @@ from schemas import (
     IngestionSuccessResponse,
     CSVIngestionResponse,
     CSVRowError,
+    InvestigationReport,
+    BatchInvestigationResponse,
 )
 from csv_parser import parse_csv_content
 from engine import reconcile_invoice, reconcile_all
+from investigator import investigate_exception, investigate_batch
 
 
 @asynccontextmanager
@@ -471,5 +474,79 @@ def list_exceptions(
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "discrepancy_details": json.loads(r.discrepancy_details) if r.discrepancy_details else None,
             "raw_snapshots": json.loads(r.raw_snapshots) if r.raw_snapshots else None,
+            "ai_investigation": json.loads(r.ai_investigation) if r.ai_investigation else None,
         })
     return {"total": len(results), "exceptions": results}
+
+
+# ============================================================================
+# STEP 4: AI INVESTIGATION & ROOT-CAUSE ENDPOINTS
+# ============================================================================
+
+@app.post(
+    "/investigate/batch",
+    response_model=BatchInvestigationResponse,
+    tags=["AI Investigation"],
+    summary="Batch run AI investigations across multiple open exceptions",
+)
+def run_batch_investigations(
+    limit: int = 5,
+    severity: str = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Batch investigates open exceptions with the AI operations analyst.
+    """
+    reports = investigate_batch(db, limit=limit, severity_filter=severity)
+    return BatchInvestigationResponse(
+        status="success",
+        total_investigated=len(reports),
+        reports=reports,
+        message=f"Completed AI root-cause analysis on {len(reports)} exceptions.",
+    )
+
+
+@app.post(
+    "/investigate/{exception_code}",
+    response_model=InvestigationReport,
+    tags=["AI Investigation"],
+    summary="Run AI Operations Analyst root-cause investigation on an exception",
+)
+def run_investigation(exception_code: str, db: Session = Depends(get_db)):
+    """
+    Passes assembled PO, Goods Receipt, Invoice evidence and rule violation context
+    to an LLM operations analyst. Returns root_cause_summary, recommended_actions, and draft_communication.
+    """
+    try:
+        report = investigate_exception(db, exception_code)
+        return report
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Investigation failed: {str(e)}")
+
+
+@app.get(
+    "/investigate/{exception_code}",
+    response_model=InvestigationReport,
+    tags=["AI Investigation"],
+    summary="Get existing AI investigation report for an exception",
+)
+def get_investigation(exception_code: str, db: Session = Depends(get_db)):
+    """
+    Retrieve the cached AI investigation report for an exception. If not yet investigated, runs it on demand.
+    """
+    exc = db.query(ExceptionRecord).filter(ExceptionRecord.exception_code == exception_code).first()
+    if not exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Exception '{exception_code}' not found.")
+
+    if exc.ai_investigation:
+        try:
+            data = json.loads(exc.ai_investigation)
+            return InvestigationReport(**data)
+        except Exception:
+            pass
+
+    # Run investigation if not yet cached
+    report = investigate_exception(db, exception_code)
+    return report
